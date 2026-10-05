@@ -1,5 +1,6 @@
 """Download public parking datasets into data/.
 
+    python scripts/download_datasets.py voc                # PASCAL VOC 2007, car boxes (~0.9 GB) - car detector
     python scripts/download_datasets.py cnrpark            # CNRPark+EXT: metadata + full frames (~1.1 GB)
     python scripts/download_datasets.py cnrpark --patches  # + 150x150 spot patches (~0.5 GB)
     python scripts/download_datasets.py pklot              # PKLot full frames + XML (~4.6 GB)
@@ -14,6 +15,10 @@ Sources
 CNRPark+EXT  http://cnrpark.it  (files hosted on GitHub releases of fabiocarrara/deep-parking)
              Amato et al., "Deep learning for decentralized parking lot occupancy
              detection", Expert Systems with Applications 72, 2017.
+PASCAL VOC   http://host.robots.ox.ac.uk/pascal/VOC/voc2007/  (mirrored on GitHub by Ultralytics)
+             Everingham et al., "The PASCAL Visual Object Classes (VOC) Challenge", IJCV 2010.
+VisDrone     https://github.com/VisDrone/VisDrone-Dataset  (mirrored by Ultralytics)
+             Zhu et al., "Detection and Tracking Meet Drones Challenge", TPAMI 2021.
 ACPDS        https://github.com/martin-marek/parking-space-occupancy  (MIT)
              Marek, "Image-Based Parking Space Occupancy Classification: Dataset
              and Baseline", arXiv:2107.12207, 2021.
@@ -56,13 +61,23 @@ FILES = {
     "acpds": [
         ("https://pub-e8bbdcbe8f6243b2a9933704a9b1d8bc.r2.dev/parking%2Frois_gopro.zip", 300_000_000, True),
     ],
+    # PASCAL VOC 2007 (Ultralytics GitHub mirror): ~10k real photos, every car boxed
+    "voc": [
+        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtrainval_06-Nov-2007.zip", 445_914_070, True),
+        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtest_06-Nov-2007.zip", 438_316_827, True),
+    ],
+    # VisDrone2019-DET (Ultralytics GitHub mirror): real high-angle/drone photos, cars boxed
+    "visdrone": [
+        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-train.zip", 1_549_875_511, True),
+        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-val.zip", 81_638_851, True),
+    ],
     # NDISPark: ~250 images, 7 parking-lot cameras, EVERY car boxed (COCO), day + night
     "ndispark": [
         ("https://zenodo.org/records/6560823/files/ndis_park.zip?download=1", 118_200_000, True),
     ],
 }
 TARGET = {"cnrpark": "cnrpark", "cnrpark-patches": "cnrpark", "pklot": "pklot", "acpds": "acpds",
-          "ndispark": "ndispark"}
+          "ndispark": "ndispark", "voc": "voc", "visdrone": "visdrone"}
 
 
 def _fmt(n: float) -> str:
@@ -143,13 +158,13 @@ def fetch(name: str, root: Path, keep: bool) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dataset", choices=["cnrpark", "pklot", "acpds", "ndispark", "side", "all"],
+    ap.add_argument("dataset", choices=["voc", "visdrone", "cnrpark", "pklot", "acpds", "ndispark", "side", "all"],
                     help="side = the datasets matching an elevated side-angle camera (acpds, ndispark, cnrpark)")
     ap.add_argument("--patches", action="store_true", help="also CNRPark spot patches (occupancy classifier)")
     ap.add_argument("--root", default="data")
     ap.add_argument("--keep-archives", action="store_true")
     a = ap.parse_args()
-    names = {"cnrpark": ["cnrpark"], "pklot": ["pklot"], "acpds": ["acpds"], "ndispark": ["ndispark"],
+    names = {"voc": ["voc"], "visdrone": ["visdrone"], "cnrpark": ["cnrpark"], "pklot": ["pklot"], "acpds": ["acpds"], "ndispark": ["ndispark"],
              "side": ["acpds", "ndispark", "cnrpark"], "all": ["acpds", "ndispark", "cnrpark", "pklot"]}[a.dataset]
     if a.patches and "cnrpark" in names:
         names.append("cnrpark-patches")
@@ -161,6 +176,8 @@ def main():
         print("  python scripts/train_models.py --labels data/cnrpark/LABELS/all.txt --images data/cnrpark/PATCHES "
               "--group-level 2 --max-per-class 3000        # occupancy classifier, grouped by camera")
         print("  python scripts/train_detector.py --cnrpark data/cnrpark --max-frames 200   # car detector")
+    if "voc" in names:
+        print("  python scripts/train_detector.py --voc data/voc --n-windows 8 --pos-jitter 1 --neg-per-frame 6 --cv 3")
     if "pklot" in names:
         print("  python scripts/train_detector.py --pklot data/pklot/PKLot/PKLot --max-frames 300")
     if "acpds" in names:

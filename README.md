@@ -114,7 +114,58 @@ Full table: `docs/cnrext_side_cams_leaderboard.csv`.
 
 ![CNR-EXT side cameras](docs/cnrext_side_cams_report.png)
 
-## Car detection and spot discovery
+## Car detector trained on a real dataset: PASCAL VOC 2007
+
+Spot discovery needs a detector that boxes cars anywhere in a frame. It is now
+trained on **PASCAL VOC 2007** (real photos where *every* car has a bounding box;
+official split: trainval for training, test for evaluation; "difficult" cars ignored,
+as in the VOC protocol). Downloaded from the Ultralytics GitHub mirror:
+`python scripts/download_datasets.py voc`.
+
+```bash
+python scripts/train_detector.py --voc data/voc --n-windows 8 --pos-jitter 1 --neg-per-frame 6 \
+       --cv 3 --hard-neg-frames 60 --out outputs/detector_voc
+```
+
+**Step 1: car vs. background patches** (1,250 training cars; 10,116 patches; 3-fold CV grouped by image)
+
+| | LogReg | RF | SVM | XGBoost |
+|---|---|---|---|---|
+| hog | 0.782 | 0.820 | 0.874 | 0.865 |
+| texture (LBP+GLCM) | 0.770 | 0.751 | 0.811 | 0.769 |
+| color (RGB+HSV) | 0.428 | 0.664 | 0.721 | 0.686 |
+| hog+texture | 0.828 | 0.852 | 0.893 | 0.888 |
+| hog+color | 0.792 | 0.843 | 0.883 | 0.884 |
+| **all** | 0.851 | 0.861 | **0.903** ← selected | 0.897 |
+
+(CV F1 for "car". The soft-vote ensemble scored 0.897 and did not beat the single SVM.)
+
+For general car photos, **HOG (shape) is the most useful feature and colour the least**
+(cars come in every colour). This is the opposite of the side-camera *occupancy*
+result above, where the spot is fixed and colour/texture changes are what matter.
+
+**Step 2: detection on the VOC 2007 test set** (721 images with cars, 1,201 cars,
+plus 300 car-free images): **AP@0.5 = 0.30**. At the default threshold (0.5):
+recall 0.55, precision 0.07 (many false alarms, e.g. building windows). About 3 s per image.
+
+Honest context:
+* VOC is hard: general photos, every viewpoint, tiny and cut-off cars. Classical
+  HOG-style detectors land roughly in this range on VOC cars; deep detectors do
+  far better.
+* The official protocol scores all 4,952 test images. Only 300 car-free images
+  were used here (for time), so the AP is somewhat optimistic.
+* VOC photos are mostly eye-level street scenes, not elevated CCTV. In a fixed
+  camera the threshold can be raised and false alarms on static objects
+  (windows, signs) never "leave", so discovery won't confirm them as spots.
+
+![VOC detector](docs/detector_voc_report.png)
+
+**Why not train the detector on CNRPark-EXT?** Tried: AP 0.02. Its labels are fixed
+squares over parking spaces, not boxes around cars, and many cars are unlabelled,
+so there's no consistent "car" target to learn. CNRPark-EXT stays the dataset for the
+**occupancy** model.
+
+## Spot discovery (how it works)
 
 ```
 frames ──► car detector ──► car boxes per frame ──► cluster over time into "sites"
@@ -142,22 +193,11 @@ frames ──► car detector ──► car boxes per frame ──► cluster ov
   such bays by hand.
 
 ```bash
-python scripts/make_synthetic_scenes.py                  # 3 training scenes + 1 unseen discovery scene
-python scripts/train_detector.py --scenes data/scenes/train_* --max-frames 80 --cv 4 --out outputs/detector
-python scripts/discover_spots.py --detector outputs/detector/car_detector.joblib \
-       --frames data/scenes/discovery/frames --ground-truth data/scenes/discovery/annotations.json
+python scripts/train_detector.py --voc data/voc --n-windows 8 --pos-jitter 1 --neg-per-frame 6 \
+       --cv 3 --hard-neg-frames 60 --out outputs/detector_voc
+python scripts/discover_spots.py --detector outputs/detector_voc/car_detector.joblib \
+       --cnrpark data/cnrpark --camera 3 --out outputs/discovery_cam3   # 23 days of real frames
 ```
-
-**Synthetic check (pipeline only, not a real result).** Trained on 80 frames from
-3 synthetic scenes and tested on held-out scene-days. Selected stage 2:
-`all | rf`. Detection AP@0.5 = 0.998 (P 0.997, R 0.998), about 1 s per frame.
-Discovery on an *unseen* scene (2 days, one frame every 10 min) found 12/12 bays
-that ever had a car (8 confirmed, 4 candidates: the never-moving cars and the
-work-from-home residents who didn't leave). There were 0 false spots and 0 spots
-in the driving lane. The 2 bays that were never used were (as expected) not
-found.
-
-![detector](docs/synthetic_detector_report.png) ![discovery](docs/synthetic_discovered_spots.png)
 
 Real data for the detector: **PKLot** (full frames + XML: `--pklot PKLot/PKLot`)
 or its **Roboflow YOLO export** (`--yolo .../train/images --car-classes 1
@@ -192,40 +232,37 @@ scripts/
   make_synthetic_scenes.py  synthetic frame sequences for the detector / discovery
   train_detector.py   train + select + evaluate the car detector
   discover_spots.py   detector over a frame sequence/video -> spots.json + occupancy log
-tests/               pytest suite (synthetic data)
+tests/               pytest suite (small synthetic images + format fixtures; real-data checks when downloaded)
 ```
 
-## Quick start
+## Quick start (public datasets)
 
 ```bash
 pip install -r requirements.txt
-python -m pytest                         # ~15 s
+python -m pytest
 
-# End-to-end demo on synthetic data
-python scripts/make_synthetic.py
-python scripts/train_models.py --data data/synthetic/patches --group-level 0 --tune-top 3 --out outputs/synth
-python scripts/detect.py --model outputs/synth/best_model.joblib --spots data/synthetic/spots.json \
-       --source data/synthetic/frame.png
-python scripts/guest_demo.py --log data/synthetic/occupancy_log.csv \
-       --request "2026-09-29 10:00" 4 --request "2026-10-03 11:00" 3
+# 1. Occupancy model (is this spot empty or full?) on CNRPark-EXT, grouped by camera
+python scripts/download_datasets.py cnrpark --patches
+python scripts/train_models.py --labels data/cnrpark/LABELS/all.txt --images data/cnrpark/PATCHES \
+       --group-level 2 --max-per-class 3000 --out outputs/cnrext_occupancy
+
+# 2. Car detector (boxes around cars) on PASCAL VOC 2007
+python scripts/download_datasets.py voc
+python scripts/train_detector.py --voc data/voc --n-windows 8 --pos-jitter 1 --neg-per-frame 6 \
+       --cv 3 --hard-neg-frames 60 --out outputs/detector_voc
+
+# 3. Spot discovery on real CNR-EXT camera frames with that detector
+python scripts/discover_spots.py --detector outputs/detector_voc/car_detector.joblib \
+       --cnrpark data/cnrpark --camera 3 --out outputs/discovery_cam3
 ```
 
-### On real data
+Later, for our own society camera:
 
 ```bash
-# CNRPark-EXT (http://cnrpark.it): group by camera (path component 2)
-python scripts/train_models.py --labels CNR-EXT/LABELS/all.txt --images CNR-EXT/PATCHES \
-       --group-level 2 --max-per-class 5000 --tune-top 3 --out outputs/cnrext
-
-# PKLot segmented: group by parking lot (UFPR04 / UFPR05 / PUCPR)
-python scripts/train_models.py --data PKLot/PKLotSegmented --group-level 0 --max-per-class 5000 --out outputs/pklot
-
-# Our society
 python scripts/annotate_spots.py --image ref_frame.jpg --out configs/society_spots.json
 python scripts/crop_patches.py --frames captures/ --spots configs/society_spots.json \
-       --model outputs/cnrext/best_model.joblib       # pre-labels; fix by moving files
-python scripts/train_models.py --data data/own_patches --out outputs/society
-python scripts/detect.py --model outputs/society/best_model.joblib --spots configs/society_spots.json \
+       --model outputs/cnrext_occupancy/best_model.joblib     # pre-labels; fix by moving files
+python scripts/detect.py --model outputs/cnrext_occupancy/best_model.joblib --spots configs/society_spots.json \
        --source rtsp://<camera> --every 60 --smooth 5
 ```
 
@@ -250,9 +287,5 @@ of accuracy, precision, recall, F1, ROC-AUC, fit time, latency), `test_top5.csv`
   latency. The ensemble must beat the best single model by ≥0.002 F1, otherwise
   the simpler model wins. The test set is used once, after selection.
 
-### Synthetic sanity run (old pipeline check only, not a real result; development has moved to real datasets)
-
-![synthetic report](docs/synthetic_report.png)
-
-On synthetic patches, HOG-based sets with SVM or LogReg score best and colour
-alone is weakest. Real-image numbers come in Phase 1.
+(The unit tests still use small synthetic images to check the code. All model
+training and every reported result use public datasets.)

@@ -154,8 +154,9 @@ def mine_hard_negatives(det: CarDetector, frames: list[FrameAnnotation], max_per
         boxes, p = det.detect(img, return_all=True)
         m = p >= det.config.threshold * 0.6
         boxes, p = boxes[m], p[m]
-        if len(f.cars) and len(boxes):
-            far = iou(boxes, f.cars).max(1) < 0.3
+        known = np.vstack([f.cars, f.ignore])
+        if len(known) and len(boxes):
+            far = iou(boxes, known).max(1) < 0.3
             boxes, p = boxes[far], p[far]
         if not f.random_negatives:
             if not len(f.negatives):
@@ -193,6 +194,8 @@ def average_precision(det: CarDetector, frames: list[FrameAnnotation], iou_thr: 
                 j = int(o.argmax())
                 if o[j] >= iou_thr:
                     used[j] = hit = True
+            if not hit and len(f.ignore) and iou(boxes[i], f.ignore).max() >= iou_thr:
+                continue  # "difficult" car: neither a hit nor a false positive (VOC protocol)
             recs.append((p[i], hit))
             tp_thr += hit
             fp_thr += not hit

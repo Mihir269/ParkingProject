@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sklearn.base import clone  # noqa: E402
 from sklearn.model_selection import GroupShuffleSplit  # noqa: E402
 
-from parking.annotations import acpds_frames, cnrpark_ext_frames, load_coco, load_pklot_xml, load_scene_json, load_yolo, sample_patches, suggest_window_sizes  # noqa: E402
+from parking.annotations import load_voc, acpds_frames, cnrpark_ext_frames, load_coco, load_pklot_xml, load_scene_json, load_yolo, sample_patches, suggest_window_sizes  # noqa: E402
 from parking.detector import CarDetector, DetectorConfig, Stage1HOG, average_precision, mine_hard_negatives  # noqa: E402
 from parking.features import FEATURE_SETS, FeatureConfig, FeatureExtractor  # noqa: E402
 from parking.models import MODEL_NAMES  # noqa: E402
@@ -44,10 +44,19 @@ ap.add_argument("--pklot", help="PKLot root with .jpg + .xml")
 ap.add_argument("--cnrpark", help="CNRPark+EXT root (after download_datasets.py cnrpark)")
 ap.add_argument("--coco", help="COCO json with car boxes (e.g. NDISPark train_coco_annotations.json)")
 ap.add_argument("--test-coco", help="COCO json for evaluation (e.g. NDISPark val_coco_annotations.json)")
+ap.add_argument("--voc", help="PASCAL VOC root (VOCdevkit/VOC2007): train on trainval, test on test")
+ap.add_argument("--voc-background", type=int, default=300,
+                help="VOC images WITHOUT cars added per split (background examples)")
 ap.add_argument("--acpds", help="ACPDS root (images/ + annotations.json); uses its train/test split")
 ap.add_argument("--cameras", type=int, nargs="*", help="CNR-EXT cameras to use (default all)")
+ap.add_argument("--test-cameras", type=int, nargs="*", help="CNR-EXT cameras held out for testing only")
 ap.add_argument("--max-frames", type=int, default=None, help="cap on training frames used for patches")
+ap.add_argument("--context-negatives", type=int, default=None,
+                help="shifted/oversized negatives per labelled car (default 2 for space-labelled data, else 0)")
+ap.add_argument("--max-windows", type=int, default=400, help="stage-1 windows kept per frame")
+ap.add_argument("--max-test-frames", type=int, default=None, help="cap on evaluation frames")
 ap.add_argument("--neg-per-frame", type=int, default=30)
+ap.add_argument("--pos-jitter", type=int, default=2, help="shifted copies per labelled car")
 ap.add_argument("--windows", type=int, nargs="+", help="window sizes w1 h1 w2 h2 ... (default: from annotations)")
 ap.add_argument("--n-windows", type=int, default=5)
 ap.add_argument("--feature-sets", nargs="+", default=list(FEATURE_SETS), choices=list(FEATURE_SETS))
@@ -78,6 +87,9 @@ if a.test_yolo:
                      random_negatives=not a.no_random_negatives)
 if a.pklot:
     frames += load_pklot_xml(a.pklot)
+if a.voc:  # official split: trainval for training, test for evaluation
+    frames += load_voc(a.voc, "trainval", n_background=a.voc_background, seed=a.seed)
+    test = (test or []) + load_voc(a.voc, "test", n_background=a.voc_background, seed=a.seed + 1)
 if a.coco:
     frames += load_coco(a.coco)
 if a.test_coco:
@@ -85,9 +97,13 @@ if a.test_coco:
 if a.acpds:  # the dataset's own split is by parking lot
     frames += acpds_frames(a.acpds, "train") + acpds_frames(a.acpds, "valid")
     test = (test or []) + acpds_frames(a.acpds, "test")
-if a.cnrpark:  # grouped by camera -> the held-out cameras are never seen in training
-    for v in cnrpark_ext_frames(a.cnrpark, a.cameras).values():
-        frames += v["frames"]
+if a.cnrpark:  # groups are camera-days; --test-cameras keeps whole cameras unseen
+    cams = sorted(set(a.cameras or range(1, 10)) | set(a.test_cameras or []))
+    for cam, v in cnrpark_ext_frames(a.cnrpark, cams).items():
+        if a.test_cameras and cam in a.test_cameras:
+            test = (test or []) + v["frames"]
+        else:
+            frames += v["frames"]
 if not frames:
     sys.exit("no annotated frames given")
 if test is None:  # hold out whole groups (scene-days / parking lots)
@@ -97,6 +113,8 @@ if test is None:  # hold out whole groups (scene-days / parking lots)
 train = frames
 if a.max_frames and len(train) > a.max_frames:
     train = [train[i] for i in sorted(rng.choice(len(train), a.max_frames, replace=False))]
+if a.max_test_frames and len(test) > a.max_test_frames:
+    test = [test[i] for i in sorted(rng.choice(len(test), a.max_test_frames, replace=False))]
 print(f"frames: train={len(train)} test={len(test)}  cars: train={sum(len(f.cars) for f in train)} "
       f"test={sum(len(f.cars) for f in test)}")
 
@@ -112,7 +130,10 @@ if len({f.group for f in train}) < a.cv + 2:
     print("few groups -> grouping CV by frame")
     for f in train:
         f.group = f"{f.group}/{Path(f.path).name}"
-P, y, g = sample_patches(train, windows, a.neg_per_frame, seed=a.seed)
+ctx = a.context_negatives if a.context_negatives is not None else (
+    0 if all(f.random_negatives for f in train) else 2)  # needed when background can't be sampled freely
+P, y, g = sample_patches(train, windows, a.neg_per_frame, pos_jitter=a.pos_jitter, seed=a.seed,
+                         context_negatives=ctx)
 cfg = FeatureConfig()
 ext = FeatureExtractor(cfg)
 X = ext.transform(P, n_jobs=a.n_jobs)
@@ -125,7 +146,7 @@ print(f"stage 2 = {res.best_name}")
 
 # ---------------------------------------------------------------- cascade + hard negatives
 stage1 = Stage1HOG(cfg).fit(P, y)
-det = CarDetector(cfg, DetectorConfig(windows, threshold=a.threshold), stage1,
+det = CarDetector(cfg, DetectorConfig(windows, threshold=a.threshold, stage1_max_windows=a.max_windows), stage1,
                   clone(res.candidates[res.best_name]).fit(X, y), res.best_name)
 if a.hard_neg_frames:
     pool = [train[i] for i in rng.choice(len(train), min(a.hard_neg_frames, len(train)), replace=False)]

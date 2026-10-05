@@ -35,6 +35,7 @@ class FrameAnnotation:
     random_negatives: bool = True  # is everything outside `cars` guaranteed car-free?
     timestamp: datetime | None = None
     group: str = "0"  # camera / sequence / day, for leakage-free splits
+    ignore: np.ndarray = field(default_factory=lambda: np.zeros((0, 4)))  # "difficult" cars: neither pos nor neg
 
     def image(self) -> np.ndarray:
         return read_rgb(self.path)
@@ -174,11 +175,12 @@ def _jitter(box, rng, amount):
 
 
 def sample_patches(frames: list[FrameAnnotation], window_sizes, neg_per_frame: int = 30,
-                   pos_jitter: int = 2, seed: int = 0):
+                   pos_jitter: int = 2, seed: int = 0, context_negatives: int = 0):
     """Car / not-car training patches.
 
     positives : every car box + ``pos_jitter`` slightly shifted/scaled copies + mirror
-    negatives : known empty boxes, random windows with IoU < 0.3 to every car
+    negatives : known empty boxes, ``context_negatives`` shifted/oversized windows per
+                car, random windows with IoU < 0.3 to every car
                 (only if ``random_negatives``), and *partial* cars (IoU 0.1-0.3), which
                 teach the classifier to fire only on a well-centred car
     Returns (patches, labels, groups).
@@ -203,6 +205,25 @@ def sample_patches(frames: list[FrameAnnotation], window_sizes, neg_per_frame: i
                 add(img, _jitter(box, rng, 0.06), 1, f.group)
         for box in f.negatives:
             add(img, box, 0, f.group)
+        # "Badly placed" windows around labelled cars: shifted half off the car, or
+        # scaled up over several cars. Safe negatives even when other cars in the image
+        # are unlabelled, and they teach the classifier to fire only on a centred car.
+        for box in f.cars:
+            for _ in range(context_negatives):
+                x1, y1, x2, y2 = box
+                w, h = x2 - x1, y2 - y1
+                if rng.random() < 0.6:
+                    ang = rng.uniform(0, 2 * np.pi)
+                    d = rng.uniform(0.5, 0.8)
+                    cand = box + np.array([np.cos(ang) * w, np.sin(ang) * h] * 2) * d
+                else:
+                    s = rng.uniform(1.8, 2.6)
+                    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                    cand = np.array([cx - w * s / 2, cy - h * s / 2, cx + w * s / 2, cy + h * s / 2])
+                if cand[0] < 0 or cand[1] < 0 or cand[2] > W or cand[3] > H:
+                    continue
+                if iou(cand, f.cars).max() < 0.3:
+                    add(img, cand, 0, f.group)
         n_rand = neg_per_frame if f.random_negatives else 0
         tries = 0
         while n_rand > 0 and tries < 50 * neg_per_frame:
@@ -214,6 +235,8 @@ def sample_patches(frames: list[FrameAnnotation], window_sizes, neg_per_frame: i
                 continue
             x, yy = rng.uniform(0, W - w), rng.uniform(0, H - h)
             box = np.array([x, yy, x + w, yy + h])
+            if len(f.ignore) and iou(box, f.ignore).max() >= 0.1:
+                continue
             o = iou(box, f.cars).max() if len(f.cars) else 0.0
             partial = 0.1 < o < 0.3 and rng.random() < 0.5
             if o < 0.1 or partial:
@@ -258,7 +281,7 @@ def cnrpark_ext_frames(root, cameras=None, full_size=(2592, 1944), img_size=(100
             cars = np.array([bays[s] for s in g.slot_id[g.occupancy == 1]]).reshape(-1, 4)
             free = np.array([bays[s] for s in g.slot_id[g.occupancy == 0]]).reshape(-1, 4)
             frames.append(FrameAnnotation(str(img), cars, free, random_negatives=False, timestamp=ts,
-                                          group=f"camera{cam}"))
+                                          group=f"camera{cam}:{ts.date()}"))  # camera-day
         out[cam] = {"bays": bays, "frames": sorted(frames, key=lambda f: f.timestamp)}
     return out
 
@@ -332,3 +355,37 @@ def acpds_frames(root, split: str = "all") -> list[FrameAnnotation]:
         out.append(FrameAnnotation(r["path"], boxes[occ], boxes[~occ], random_negatives=False,
                                    group=f"{r['split']}:{Path(r['path']).stem}"))
     return out
+
+
+# ---------------------------------------------------------------- PASCAL VOC
+def load_voc(root, split: str = "trainval", cls: str = "car", n_background: int | None = None,
+             seed: int = 0) -> list[FrameAnnotation]:
+    """PASCAL VOC (e.g. VOC2007 via the Ultralytics GitHub mirror): every car in every
+    image is boxed, so random background windows are safe negatives. Cars marked
+    ``difficult`` (tiny / heavily occluded) are ``ignore`` boxes, as in the VOC protocol.
+
+    Returns all images of ``split`` containing a ``cls`` object, plus ``n_background``
+    randomly chosen images without one (None = all of them)."""
+    root = Path(root)
+    if not (root / "Annotations").exists():
+        found = sorted(root.rglob("VOC2007")) or sorted(p.parent for p in root.rglob("Annotations"))
+        root = found[0]
+    ids = (root / "ImageSets" / "Main" / f"{split}.txt").read_text().split()
+    with_cls, without = [], []
+    for i in ids:
+        r = ET.parse(root / "Annotations" / f"{i}.xml").getroot()
+        cars, hard = [], []
+        for o in r.iter("object"):
+            if o.findtext("name") != cls:
+                continue
+            b = o.find("bndbox")
+            box = [float(b.findtext(k)) - (1 if k.startswith(("xmin", "ymin")) else 0)
+                   for k in ("xmin", "ymin", "xmax", "ymax")]
+            (hard if o.findtext("difficult") == "1" else cars).append(box)
+        f = FrameAnnotation(str(root / "JPEGImages" / f"{i}.jpg"), np.array(cars).reshape(-1, 4),
+                            random_negatives=True, group=i, ignore=np.array(hard).reshape(-1, 4))
+        (with_cls if len(cars) or len(hard) else without).append(f)
+    if n_background is not None and len(without) > n_background:
+        rng = np.random.default_rng(seed)
+        without = [without[i] for i in sorted(rng.choice(len(without), n_background, replace=False))]
+    return with_cls + without
