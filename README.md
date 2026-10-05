@@ -13,10 +13,12 @@ park. This project:
 4. **Gives free spots to guests** for a requested number of hours, but only
    when the spot is very likely to stay free for the whole visit.
 
-**Camera assumption** (from Prof. Kulkarni): fixed camera about **10 ft high**,
-looking along the lane rather than from the side. Spots then look like
-quadrilaterals. Each spot is perspective-warped to an upright patch before
-classification, so near and far spots look alike to the model.
+**Camera placement:** a fixed camera mounted high (~10 m) on the **side** of
+the parking area, looking diagonally across the rows, as in malls.
+(Prof. Kulkarni's first suggestion was ~10 ft, looking along the lane; the code
+supports both.) Spots then look like quadrilaterals. Each spot is
+perspective-warped to an upright patch before classification, so near and far
+spots look alike to the model.
 
 ---
 
@@ -42,26 +44,30 @@ is parked in their spot.
 
 ---
 
-## Datasets
+## Datasets (real data only)
+
+Target camera: **elevated (~10 m), on the side of the car park, looking diagonally
+across the rows**, like mall CCTV.
 
 ```bash
-python scripts/download_datasets.py cnrpark --patches   # ~1.6 GB, from GitHub releases (fast, reliable)
-python scripts/download_datasets.py pklot               # ~4.6 GB, from UFPR (slow server at times)
+python scripts/download_datasets.py side --patches   # ACPDS + NDISPark + CNRPark+EXT
+python scripts/download_datasets.py pklot            # optional, ~4.6 GB
 ```
 
-| | **CNRPark-EXT** (recommended first) | **PKLot** |
-|---|---|---|
-| Camera | 9 cameras on building floors, many angles, trees/lamp posts/cars occluding: **closest to a ~10 ft society camera** | 3 views from high rooftops, almost bird's-eye: easier, less like our setup |
-| Size | 4,081 frames (1000×750), 164 spaces, ~145k spot patches | 12,417 frames (1280×720), ~696k spot patches |
-| Time series | 23 days, every 30 min, 7:00–18:00; office car park, so commuters come and go | ~30 days per lot, every 5 min: denser, better for testing discovery |
-| Labels | Fixed **square per space** (often covers only part of the car) + occupied/free. Many cars outside monitored spaces are unlabelled | **Polygon per space** + occupied/free. Closer to the car outline, but still spaces, not cars |
-| Weather | sunny / overcast / rainy | sunny / cloudy / rainy |
-| Best use for us | Occupancy classifier; testing on **unseen cameras** (= a new society) | Second dataset for cross-dataset tests; denser sequences for discovery |
+| Dataset | View | Labels | Size | Use it for |
+|---|---|---|---|---|
+| **ACPDS** (Marek 2021) | **~10 m high, every image a different side/diagonal view**: the closest match | 4-corner polygon per space + occupied/free; train/valid/test split **by parking lot** | 293 images, ~10k spaces | Occupancy classifier on unseen lots; spot polygons |
+| **NDISPark** (Ciampi 2021) | 7 parking-lot cameras, various elevated angles, **day and night**, occlusions | **Every car boxed** (COCO) | ~250 images | **Car detector**: the only one here with true car boxes |
+| **CNRPark-EXT** (Amato 2017) | 9 building cameras; **cams 1, 2, 3, 9 are diagonal side views**, 4–8 look straight across | Square per space + occupied/free; per-frame time series | 4,081 frames, ~145k patches, 23 days, every 30 min | Occupancy classifier (most data); real time series for discovery/scheduler |
+| PKLot (Almeida 2015) | Rooftops, nearly bird's-eye | Polygon per space + occupied/free | 12,417 frames | Lowest priority for this camera; cross-dataset check |
 
-Neither dataset has tight boxes around *every* car, which is what a true car
-detector ideally needs. Both label parking *spaces*. For the detector this means:
-positives = occupied spaces, negatives = free spaces only
-(`--no-random-negatives` is set automatically for both).
+Notes:
+* Only NDISPark labels every car. The others label parking *spaces*, so for the
+  detector positives = occupied spaces, negatives = free spaces only (random
+  background crops could contain unlabelled cars).
+* CNRPark-EXT downloads from GitHub. ACPDS (Cloudflare R2) and NDISPark (Zenodo)
+  come from other hosts. All are public; cite the papers listed in
+  `scripts/download_datasets.py`.
 
 ### First real result: occupancy classifier on CNR-EXT
 
@@ -82,6 +88,31 @@ group; tree models and SVM beat LogReg. Scores vary a lot between cameras (see t
 `docs/cnrext_occupancy_leaderboard.csv`.
 
 ![CNR-EXT occupancy](docs/cnrext_occupancy_report.png)
+
+### Side-angled cameras only (our camera placement): CNR-EXT cameras 1, 2, 3, 9
+
+Same protocol, restricted to the four diagonal side-view cameras. 6,000 patches.
+Trained/CV'd on cameras 1, 2, 9 (leave-one-camera-out), **tested on camera 3,
+never seen**.
+
+| Feature set | Best model | CV F1 (unseen camera) |
+|---|---|---|
+| hog | RF | 0.889 ± 0.052 |
+| texture (LBP+GLCM) | SVM | 0.922 ± 0.034 |
+| color (RGB+HSV) | RF | 0.934 ± 0.029 |
+| **texture+color** | **RF** | **0.940 ± 0.032** ← selected |
+| all | XGBoost | 0.930 ± 0.039 |
+
+**Held-out camera 3: F1 0.955, ROC-AUC 0.994** (57 errors / 1,337).
+`texture+color | xgb` scored 0.962 at 0.009 ms/patch, a good deployment choice.
+
+**Finding:** from diagonal side views, **HOG (shape) is the weakest
+feature** (it was the backbone for straight-across views). A car's outline
+changes a lot with the viewing angle, while texture and colour don't. For a
+mall-style camera, prioritise texture+colour features.
+Full table: `docs/cnrext_side_cams_leaderboard.csv`.
+
+![CNR-EXT side cameras](docs/cnrext_side_cams_report.png)
 
 ## Car detection and spot discovery
 
@@ -219,7 +250,7 @@ of accuracy, precision, recall, F1, ROC-AUC, fit time, latency), `test_top5.csv`
   latency. The ensemble must beat the best single model by ≥0.002 F1, otherwise
   the simpler model wins. The test set is used once, after selection.
 
-### Synthetic sanity run (pipeline check only, not a real result)
+### Synthetic sanity run (old pipeline check only, not a real result; development has moved to real datasets)
 
 ![synthetic report](docs/synthetic_report.png)
 

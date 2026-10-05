@@ -3,6 +3,7 @@
     python scripts/download_datasets.py cnrpark            # CNRPark+EXT: metadata + full frames (~1.1 GB)
     python scripts/download_datasets.py cnrpark --patches  # + 150x150 spot patches (~0.5 GB)
     python scripts/download_datasets.py pklot              # PKLot full frames + XML (~4.6 GB)
+    python scripts/download_datasets.py side               # ACPDS + NDISPark + CNRPark+EXT (elevated side views)
     python scripts/download_datasets.py all --patches
 
 Downloads resume if interrupted (HTTP Range), archives are extracted and then
@@ -13,6 +14,12 @@ Sources
 CNRPark+EXT  http://cnrpark.it  (files hosted on GitHub releases of fabiocarrara/deep-parking)
              Amato et al., "Deep learning for decentralized parking lot occupancy
              detection", Expert Systems with Applications 72, 2017.
+ACPDS        https://github.com/martin-marek/parking-space-occupancy  (MIT)
+             Marek, "Image-Based Parking Space Occupancy Classification: Dataset
+             and Baseline", arXiv:2107.12207, 2021.
+NDISPark     https://zenodo.org/records/6560823
+             Ciampi et al., "Domain Adaptation for Traffic Density Estimation",
+             VISAPP 2021.
 PKLot        https://web.inf.ufpr.br/vri/databases/parking-lot-database/  (CC BY 4.0)
              Almeida et al., "PKLot - A robust dataset for parking lot
              classification", Expert Systems with Applications 42(11), 2015.
@@ -45,8 +52,17 @@ FILES = {
     "pklot": [
         ("http://www.inf.ufpr.br/vri/databases/PKLot.tar.gz", 4_600_000_000, True),
     ],
+    # Action-Camera Parking Dataset: 293 images from ~10 m high, every image a different view
+    "acpds": [
+        ("https://pub-e8bbdcbe8f6243b2a9933704a9b1d8bc.r2.dev/parking%2Frois_gopro.zip", 300_000_000, True),
+    ],
+    # NDISPark: ~250 images, 7 parking-lot cameras, EVERY car boxed (COCO), day + night
+    "ndispark": [
+        ("https://zenodo.org/records/6560823/files/ndis_park.zip?download=1", 118_200_000, True),
+    ],
 }
-TARGET = {"cnrpark": "cnrpark", "cnrpark-patches": "cnrpark", "pklot": "pklot"}
+TARGET = {"cnrpark": "cnrpark", "cnrpark-patches": "cnrpark", "pklot": "pklot", "acpds": "acpds",
+          "ndispark": "ndispark"}
 
 
 def _fmt(n: float) -> str:
@@ -115,7 +131,8 @@ def fetch(name: str, root: Path, keep: bool) -> None:
     if free < need:
         print(f"  warning: {_fmt(free)} free, ~{_fmt(need)} needed")
     for url, _, do_extract in FILES[name]:
-        f = download(url, out / url.rsplit("/", 1)[1])
+        fname = url.split("?")[0].rsplit("/", 1)[1].replace("%2F", "_")
+        f = download(url, out / fname)
         if do_extract:
             extract(f, out)
             if not keep:
@@ -126,12 +143,14 @@ def fetch(name: str, root: Path, keep: bool) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dataset", choices=["cnrpark", "pklot", "all"])
+    ap.add_argument("dataset", choices=["cnrpark", "pklot", "acpds", "ndispark", "side", "all"],
+                    help="side = the datasets matching an elevated side-angle camera (acpds, ndispark, cnrpark)")
     ap.add_argument("--patches", action="store_true", help="also CNRPark spot patches (occupancy classifier)")
     ap.add_argument("--root", default="data")
     ap.add_argument("--keep-archives", action="store_true")
     a = ap.parse_args()
-    names = {"cnrpark": ["cnrpark"], "pklot": ["pklot"], "all": ["cnrpark", "pklot"]}[a.dataset]
+    names = {"cnrpark": ["cnrpark"], "pklot": ["pklot"], "acpds": ["acpds"], "ndispark": ["ndispark"],
+             "side": ["acpds", "ndispark", "cnrpark"], "all": ["acpds", "ndispark", "cnrpark", "pklot"]}[a.dataset]
     if a.patches and "cnrpark" in names:
         names.append("cnrpark-patches")
     for n in names:
@@ -144,6 +163,12 @@ def main():
         print("  python scripts/train_detector.py --cnrpark data/cnrpark --max-frames 200   # car detector")
     if "pklot" in names:
         print("  python scripts/train_detector.py --pklot data/pklot/PKLot/PKLot --max-frames 300")
+    if "acpds" in names:
+        print("  python scripts/prepare_acpds_patches.py --root data/acpds && "
+              "python scripts/train_models.py --data data/acpds_patches --group-level 1")
+    if "ndispark" in names:
+        print("  python scripts/train_detector.py --coco data/ndispark/train/train_coco_annotations.json "
+              "--test-coco data/ndispark/validation/val_coco_annotations.json")
 
 
 if __name__ == "__main__":

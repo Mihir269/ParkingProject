@@ -261,3 +261,74 @@ def cnrpark_ext_frames(root, cameras=None, full_size=(2592, 1944), img_size=(100
                                           group=f"camera{cam}"))
         out[cam] = {"bays": bays, "frames": sorted(frames, key=lambda f: f.timestamp)}
     return out
+
+
+# ---------------------------------------------------------------- COCO (NDISPark and others)
+def load_coco(json_path, images_dir=None, category: str = "car", group_fn=None) -> list[FrameAnnotation]:
+    """COCO detection annotations -> frames. Every car is boxed in datasets like
+    NDISPark, so random background windows are safe negatives.
+
+    ``group_fn(file_name)`` -> camera id for leakage-free splits; NDISPark file names
+    are ``<camera>_<unix time>.jpg``, which is the default."""
+    json_path = Path(json_path)
+    images_dir = Path(images_dir) if images_dir else json_path.parent / "imgs"
+    data = json.loads(json_path.read_text())
+    cat_ids = {c["id"] for c in data.get("categories", []) if c["name"] == category} or None
+    boxes: dict[int, list] = {}
+    for a in data["annotations"]:
+        if cat_ids is None or a["category_id"] in cat_ids:
+            x, y, w, h = a["bbox"]
+            boxes.setdefault(a["image_id"], []).append([x, y, x + w, y + h])
+    group_fn = group_fn or (lambda n: Path(n).stem.split("_")[0])
+    out = []
+    for im in data["images"]:
+        name = im["file_name"]
+        ts = None
+        stem = Path(name).stem.split("_")
+        if len(stem) > 1 and stem[-1].isdigit() and len(stem[-1]) == 10:  # unix time
+            ts = datetime.fromtimestamp(int(stem[-1]))
+        out.append(FrameAnnotation(str(images_dir / name), np.array(boxes.get(im["id"], []), float).reshape(-1, 4),
+                                   random_negatives=True, timestamp=ts, group=group_fn(name)))
+    return out
+
+
+# ---------------------------------------------------------------- ACPDS (action camera, ~10 m high)
+def load_acpds(root, split: str = "all") -> list[dict]:
+    """Action-Camera Parking Dataset (Marek 2021): ``images/`` + ``annotations.json``
+    with per-image ``rois_list`` (4 corners per space, normalised to [0,1]) and
+    ``occupancy_list``, split into train / valid / test by parking lot.
+
+    Returns [{"path", "split", "quads" (N,4,2 pixels), "occupied" (N,)}]."""
+    import cv2
+
+    root = Path(root)
+    if not (root / "annotations.json").exists():  # archive may add a top-level folder
+        found = sorted(root.rglob("annotations.json"))
+        if not found:
+            raise FileNotFoundError(f"no annotations.json under {root}")
+        root = found[0].parent
+    ann = json.loads((root / "annotations.json").read_text())
+    splits = ["train", "valid", "test"] if split == "all" else [split]
+    out = []
+    for sp in splits:
+        a = ann[sp]
+        for name, rois, occ in zip(a["file_names"], a["rois_list"], a["occupancy_list"]):
+            path = root / "images" / name
+            img = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_4)
+            h, w = (img.shape[0] * 4, img.shape[1] * 4) if img is not None else (1, 1)
+            q = np.asarray(rois, float).reshape(-1, 4, 2) * [w - 1, h - 1]
+            out.append({"path": str(path), "split": sp, "quads": q, "occupied": np.asarray(occ, int)})
+    return out
+
+
+def acpds_frames(root, split: str = "all") -> list[FrameAnnotation]:
+    """ACPDS as detector annotations: occupied spaces = cars, free spaces = negatives.
+    Cars outside annotated spaces are unlabelled -> random_negatives=False.
+    Each image is its own viewpoint, so group = image."""
+    out = []
+    for r in load_acpds(root, split):
+        boxes = np.column_stack([r["quads"].min(1), r["quads"].max(1)]) if len(r["quads"]) else np.zeros((0, 4))
+        occ = r["occupied"].astype(bool)
+        out.append(FrameAnnotation(r["path"], boxes[occ], boxes[~occ], random_negatives=False,
+                                   group=f"{r['split']}:{Path(r['path']).stem}"))
+    return out
