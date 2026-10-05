@@ -26,7 +26,8 @@ classification, so near and far spots look alike to the model.
 |---|---|---|
 | **0. Setup** | Repo structure, feature extraction, model comparison, scheduler, tests | ✅ done (this commit) |
 | **1. Data** | (a) Public benchmarks: **CNRPark-EXT** (elevated cameras, similar to our setup, 150×150 spot patches, sunny/overcast/rainy) and **PKLot** (top-down, about 700k patches). (b) **Our own society**: mount or borrow a camera at about 10 ft, capture a frame every 1–5 min for 1–2 weeks, mark spots once with `annotate_spots.py`, crop with `crop_patches.py`, then label (pre-label with the benchmark model and fix the mistakes) | ⏳ next |
-| **2. Spot detection** | v1: manual polygons per camera (one-time, about 10 min). v2 (stretch): automatic spot finding from line detection, or from where cars park over many days | v1 ✅ |
+| **2a. Car detector** | Sliding-window detector on whole frames, built from the same features and models: a fast HOG-linear stage 1, then the best (feature set × model) from the comparison as stage 2, plus hard-negative mining and NMS. Evaluated by AP@0.5 on held-out scenes/days | ✅ pipeline; ⏳ real data |
+| **2b. Spot discovery** | Spots found automatically from car activity: a place where a car stays parked, then leaves (or was empty before it arrived), verified by an appearance change. Passing cars never form a stay. Manual polygons are still available as a fallback | ✅ v1 |
 | **3. Occupancy model** | Features: HOG, LBP, GLCM, RGB and HSV histograms, plus combinations (11 feature sets). Models: LogReg, RF, SVM, XGBoost. Grouped CV (by camera/day, to avoid leakage), optional grid-search of the top N, soft-voting ensemble of the top model families, selection on CV F1, one final held-out test | ✅ pipeline; ⏳ run on real data |
 | **4. Robustness** | Cross-dataset tests (train PKLot → test CNRPark, train benchmark → test our society), weather/night breakdown, per-spot error analysis (far spots, pillar occlusion), temporal smoothing across frames | ⏳ |
 | **5. Availability model** | Occupancy log → time-slot grid → P(spot stays free for the whole window) from comparable past days (weekday vs. weekend), with a safety buffer for residents who return early | ✅ v1 |
@@ -41,6 +42,58 @@ is parked in their spot.
 
 ---
 
+## Car detection and spot discovery
+
+```
+frames ──► car detector ──► car boxes per frame ──► cluster over time into "sites"
+                                                      │
+          stays (car parked ≥ 45 min, detected in ≥ 75% of those frames)
+          departures / arrivals (empty ≥ 30 min, appearance really changed)
+                                                      │
+       confirmed spot (seen occupied AND empty) · candidate (never left) · dropped (passing car)
+                                                      │
+                                spots.json  +  occupancy_log.csv  ──► guest scheduler
+```
+
+* **Detector stage 1:** a linear model on HOG. For each window size the frame is
+  rescaled once, and every position is scored by sliding the weights over the HOG
+  block grid. Its threshold keeps 99% of training cars, so it only removes obvious
+  background.
+* **Detector stage 2:** the best of 44 (feature set × LogReg / RF / SVM / XGBoost)
+  combinations, chosen by grouped CV on car vs. background patches. Negatives
+  include empty bays and *partially* covered cars, so it only fires on a
+  well-centred car. Then one round of hard-negative mining.
+* **Window sizes:** k-means on the annotated car boxes, so the detector adapts to the
+  camera.
+* **Limitation:** a bay that never has a car during the observation period
+  can't be found this way. Run discovery for at least a few weekdays, or add
+  such bays by hand.
+
+```bash
+python scripts/make_synthetic_scenes.py                  # 3 training scenes + 1 unseen discovery scene
+python scripts/train_detector.py --scenes data/scenes/train_* --max-frames 80 --cv 4 --out outputs/detector
+python scripts/discover_spots.py --detector outputs/detector/car_detector.joblib \
+       --frames data/scenes/discovery/frames --ground-truth data/scenes/discovery/annotations.json
+```
+
+**Synthetic check (pipeline only, not a real result).** Trained on 80 frames from
+3 synthetic scenes and tested on held-out scene-days. Selected stage 2:
+`all | rf`. Detection AP@0.5 = 0.998 (P 0.997, R 0.998), about 1 s per frame.
+Discovery on an *unseen* scene (2 days, one frame every 10 min) found 12/12 bays
+that ever had a car (8 confirmed, 4 candidates: the never-moving cars and the
+work-from-home residents who didn't leave). There were 0 false spots and 0 spots
+in the driving lane. The 2 bays that were never used were (as expected) not
+found.
+
+![detector](docs/synthetic_detector_report.png) ![discovery](docs/synthetic_discovered_spots.png)
+
+Real data for the detector: **PKLot** (full frames + XML: `--pklot PKLot/PKLot`)
+or its **Roboflow YOLO export** (`--yolo .../train/images --car-classes 1
+--empty-classes 0 --no-random-negatives --test-yolo .../valid/images`). These
+datasets only label cars inside spaces, so `--no-random-negatives` keeps
+unlabelled cars in the lanes out of the negatives. Any frames you label yourself
+in YOLO format (Roboflow, CVAT, Label Studio) also work.
+
 ## Layout
 
 ```
@@ -52,6 +105,10 @@ parking/
   spots.py       spot polygons (JSON), perspective crop, overlay drawing
   detect.py      per-frame classification and temporal smoothing
   scheduler.py   occupancy history -> availability model -> guest allocator
+  annotations.py frame-level car boxes (scene JSON / YOLO / PKLot XML), IoU, NMS, patch sampling
+  detector.py    two-stage sliding-window car detector, hard negatives, AP evaluation
+  discovery.py   spot discovery from detections over time + evaluation against true bays
+  scenes.py      synthetic camera sequences (residents arriving/leaving, lane traffic)
   synthetic.py   synthetic patches/frames/logs for tests & demos only
 scripts/
   annotate_spots.py   click 4 corners per spot on a reference frame -> spots.json
@@ -60,6 +117,9 @@ scripts/
   detect.py           run on image / folder / video / RTSP, write overlay + occupancy log
   guest_demo.py       learn availability from a log, allot guests
   make_synthetic.py   generate demo data
+  make_synthetic_scenes.py  synthetic frame sequences for the detector / discovery
+  train_detector.py   train + select + evaluate the car detector
+  discover_spots.py   detector over a frame sequence/video -> spots.json + occupancy log
 tests/               pytest suite (synthetic data)
 ```
 

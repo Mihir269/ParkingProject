@@ -96,6 +96,7 @@ class SelectionResult:
     best_estimator: object  # fitted on full training split
     test_metrics: dict
     test_metrics_all: pd.DataFrame  # test metrics of every top candidate (for reporting only)
+    candidates: dict | None = None  # name -> unfitted estimator, for refitting elsewhere
 
 
 def run_selection(
@@ -213,4 +214,5 @@ def run_selection(
         m.pop("confusion_matrix")
         test_rows.append({"candidate": name, **{f"test_{k}": v for k, v in m.items()}})
 
-    return SelectionResult(board, best_name, best, test_metrics, pd.DataFrame(test_rows))
+    return SelectionResult(board, best_name, best, test_metrics, pd.DataFrame(test_rows),
+                           {k: v[0] for k, v in candidates.items()})
