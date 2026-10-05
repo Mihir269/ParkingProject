@@ -42,6 +42,47 @@ is parked in their spot.
 
 ---
 
+## Datasets
+
+```bash
+python scripts/download_datasets.py cnrpark --patches   # ~1.6 GB, from GitHub releases (fast, reliable)
+python scripts/download_datasets.py pklot               # ~4.6 GB, from UFPR (slow server at times)
+```
+
+| | **CNRPark-EXT** (recommended first) | **PKLot** |
+|---|---|---|
+| Camera | 9 cameras on building floors, many angles, trees/lamp posts/cars occluding: **closest to a ~10 ft society camera** | 3 views from high rooftops, almost bird's-eye: easier, less like our setup |
+| Size | 4,081 frames (1000×750), 164 spaces, ~145k spot patches | 12,417 frames (1280×720), ~696k spot patches |
+| Time series | 23 days, every 30 min, 7:00–18:00; office car park, so commuters come and go | ~30 days per lot, every 5 min: denser, better for testing discovery |
+| Labels | Fixed **square per space** (often covers only part of the car) + occupied/free. Many cars outside monitored spaces are unlabelled | **Polygon per space** + occupied/free. Closer to the car outline, but still spaces, not cars |
+| Weather | sunny / overcast / rainy | sunny / cloudy / rainy |
+| Best use for us | Occupancy classifier; testing on **unseen cameras** (= a new society) | Second dataset for cross-dataset tests; denser sequences for discovery |
+
+Neither dataset has tight boxes around *every* car, which is what a true car
+detector ideally needs. Both label parking *spaces*. For the detector this means:
+positives = occupied spaces, negatives = free spaces only
+(`--no-random-negatives` is set automatically for both).
+
+### First real result: occupancy classifier on CNR-EXT
+
+6,000 patches (3,000 per class) from all 9 cameras, split **by camera**: the test
+cameras are never seen in training, which simulates a new society. 5-fold grouped CV.
+
+| | CV F1 (unseen cameras) | Held-out test F1 | Latency / patch |
+|---|---|---|---|
+| **Selected: soft-vote of `all|svm` + `all|xgb` + `texture+color|logreg`** | 0.963 ± 0.018 | **0.978** (31 errors / 1,407) | 0.42 ms |
+| `all | xgb` (single model, fastest good option) | 0.955 ± 0.021 | 0.975 | 0.01 ms |
+| `all | svm` | 0.956 ± 0.028 | 0.975 | 0.50 ms |
+| `hog | logreg` | 0.883 ± 0.077 | — | — |
+| `color | logreg` | 0.865 ± 0.038 | — | — |
+
+Takeaways: combining shape (HOG), texture (LBP/GLCM) and colour beats any single
+group; tree models and SVM beat LogReg. Scores vary a lot between cameras (see the
+± values), so a new camera's viewpoint matters. Full table:
+`docs/cnrext_occupancy_leaderboard.csv`.
+
+![CNR-EXT occupancy](docs/cnrext_occupancy_report.png)
+
 ## Car detection and spot discovery
 
 ```

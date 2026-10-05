@@ -9,6 +9,7 @@ python scripts/train_detector.py --scenes data/scenes/train_* --out outputs/dete
 python scripts/train_detector.py --yolo PKLot.v1/train/images --car-classes 1 --empty-classes 0 \
        --test-yolo PKLot.v1/valid/images --out outputs/detector_pklot
 python scripts/train_detector.py --pklot PKLot/PKLot --out outputs/detector_pklot
+python scripts/train_detector.py --cnrpark data/cnrpark --max-frames 200 --out outputs/detector_cnr
 """
 import argparse
 import json
@@ -22,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sklearn.base import clone  # noqa: E402
 from sklearn.model_selection import GroupShuffleSplit  # noqa: E402
 
-from parking.annotations import load_pklot_xml, load_scene_json, load_yolo, sample_patches, suggest_window_sizes  # noqa: E402
+from parking.annotations import cnrpark_ext_frames, load_pklot_xml, load_scene_json, load_yolo, sample_patches, suggest_window_sizes  # noqa: E402
 from parking.detector import CarDetector, DetectorConfig, Stage1HOG, average_precision, mine_hard_negatives  # noqa: E402
 from parking.features import FEATURE_SETS, FeatureConfig, FeatureExtractor  # noqa: E402
 from parking.models import MODEL_NAMES  # noqa: E402
@@ -37,6 +38,8 @@ ap.add_argument("--empty-classes", type=int, nargs="*", default=[])
 ap.add_argument("--no-random-negatives", action="store_true",
                 help="dataset only labels cars inside spaces (e.g. PKLot): sample negatives only from empty spaces")
 ap.add_argument("--pklot", help="PKLot root with .jpg + .xml")
+ap.add_argument("--cnrpark", help="CNRPark+EXT root (after download_datasets.py cnrpark)")
+ap.add_argument("--cameras", type=int, nargs="*", help="CNR-EXT cameras to use (default all)")
 ap.add_argument("--max-frames", type=int, default=None, help="cap on training frames used for patches")
 ap.add_argument("--neg-per-frame", type=int, default=30)
 ap.add_argument("--windows", type=int, nargs="+", help="window sizes w1 h1 w2 h2 ... (default: from annotations)")
@@ -69,6 +72,9 @@ if a.test_yolo:
                      random_negatives=not a.no_random_negatives)
 if a.pklot:
     frames += load_pklot_xml(a.pklot)
+if a.cnrpark:  # grouped by camera -> the held-out cameras are never seen in training
+    for v in cnrpark_ext_frames(a.cnrpark, a.cameras).values():
+        frames += v["frames"]
 if not frames:
     sys.exit("no annotated frames given")
 if test is None:  # hold out whole groups (scene-days / parking lots)

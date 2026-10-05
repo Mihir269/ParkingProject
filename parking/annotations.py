@@ -220,3 +220,44 @@ def sample_patches(frames: list[FrameAnnotation], window_sizes, neg_per_frame: i
                 add(img, box, 0, f.group)
                 n_rand -= 1
     return P, np.array(y), np.array(g)
+
+
+# ---------------------------------------------------------------- CNRPark-EXT
+CNR_WEATHER = {"S": "SUNNY", "O": "OVERCAST", "R": "RAINY"}
+
+
+def cnrpark_ext_frames(root, cameras=None, full_size=(2592, 1944), img_size=(1000, 750)) -> dict:
+    """Per-camera frame annotations for CNR-EXT (data/cnrpark after download).
+
+    Returns {camera: {"bays": {slot_id: box}, "frames": [FrameAnnotation, ...]}}.
+    Labels are per parking space (square box around the space, from cameraN.csv),
+    so "cars" are boxes of occupied spaces and "negatives" boxes of free spaces.
+    Cars outside the monitored spaces are unlabelled -> random_negatives=False.
+    """
+    import pandas as pd
+
+    root = Path(root)
+    meta = pd.read_csv(root / "CNRPark+EXT.csv", dtype={"camera": str})
+    meta = meta[~meta.camera.isin(["A", "B"])].copy()
+    meta["cam"] = meta.camera.astype(int)
+    sx, sy = img_size[0] / full_size[0], img_size[1] / full_size[1]
+    out = {}
+    for cam in sorted(meta.cam.unique()):
+        if cameras and cam not in cameras:
+            continue
+        boxes = pd.read_csv(root / f"camera{cam}.csv")
+        bays = {int(r.SlotId): (r.X * sx, r.Y * sy, (r.X + r.W) * sx, (r.Y + r.H) * sy) for r in boxes.itertuples()}
+        frames = []
+        for dt, g in meta[meta.cam == cam].groupby("datetime"):
+            ts = datetime.strptime(dt, "%Y-%m-%d_%H.%M")
+            weather = CNR_WEATHER[g.weather.iloc[0]]
+            img = root / "FULL_IMAGE_1000x750" / weather / f"{ts:%Y-%m-%d}" / f"camera{cam}" / f"{ts:%Y-%m-%d_%H%M}.jpg"
+            if not img.exists():
+                continue
+            g = g[g.slot_id.isin(bays)]
+            cars = np.array([bays[s] for s in g.slot_id[g.occupancy == 1]]).reshape(-1, 4)
+            free = np.array([bays[s] for s in g.slot_id[g.occupancy == 0]]).reshape(-1, 4)
+            frames.append(FrameAnnotation(str(img), cars, free, random_negatives=False, timestamp=ts,
+                                          group=f"camera{cam}"))
+        out[cam] = {"bays": bays, "frames": sorted(frames, key=lambda f: f.timestamp)}
+    return out

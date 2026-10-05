@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from parking.annotations import cnrpark_ext_frames  # noqa: E402
 from parking.data import IMG_EXTS, read_rgb  # noqa: E402
 from parking.detector import CarDetector  # noqa: E402
 from parking.discovery import DiscoveryConfig, SpotDiscovery, evaluate_discovery  # noqa: E402
@@ -30,6 +31,8 @@ ap.add_argument("--detector", required=True)
 src = ap.add_mutually_exclusive_group(required=True)
 src.add_argument("--frames", help="folder of frames")
 src.add_argument("--video", help="video file / RTSP URL")
+src.add_argument("--cnrpark", help="CNRPark+EXT root: use the frames of --camera (labelled spaces = ground truth)")
+ap.add_argument("--camera", type=int, default=8)
 ap.add_argument("--every", type=float, default=300, help="seconds between sampled video frames")
 ap.add_argument("--start", default=None, help="video start time (ISO), default now")
 ap.add_argument("--ts-format", default="%Y%m%d_%H%M")
@@ -48,8 +51,14 @@ disc = SpotDiscovery(DiscoveryConfig(min_stay_minutes=a.min_stay, min_absence_mi
                                      min_change=a.min_change))
 
 
+cnr = cnrpark_ext_frames(a.cnrpark, [a.camera])[a.camera] if a.cnrpark else None
+
+
 def frames():
-    if a.frames:
+    if cnr:
+        for f in cnr["frames"]:
+            yield f.timestamp, f.image()
+    elif a.frames:
         for f in sorted(p for p in Path(a.frames).iterdir() if p.suffix.lower() in IMG_EXTS):
             try:
                 ts = datetime.strptime(f.stem, a.ts_format)
@@ -103,8 +112,11 @@ for s in spots:
     cv2.putText(vis, s.id, (x + 3, y + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1, cv2.LINE_AA)
 cv2.imwrite(str(out / "discovered_spots.png"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
 
-if a.ground_truth:
-    gt = json.loads(Path(a.ground_truth).read_text())
+gt = json.loads(Path(a.ground_truth).read_text()) if a.ground_truth else (
+    {"bays": {str(k): v for k, v in cnr["bays"].items()}} if cnr else None)
+if gt:
+    if cnr:
+        print("note: CNR-EXT labels only some spaces; spots found on unlabelled spaces count as false here")
     metrics, table = evaluate_discovery(spots, {k: tuple(v) for k, v in gt["bays"].items()}, gt.get("bay_kinds"))
     table.to_csv(out / "evaluation.csv", index=False)
     (out / "evaluation.json").write_text(json.dumps(metrics, indent=2))
