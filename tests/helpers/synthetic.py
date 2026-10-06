@@ -1,4 +1,4 @@
-"""Synthetic data, ONLY for smoke tests and demos of the pipeline.
+"""Synthetic test fixtures: used ONLY by the unit tests to check that the code runs.
 
 Real results must come from real images (PKLot, CNRPark-EXT, or crops from the
 society camera). Synthetic patches are deliberately varied (lighting, shadows,
@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from .spots import Spot
+from parking.spots import Spot
 
 
 def _asphalt(rng, h, w):

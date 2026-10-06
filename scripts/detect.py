@@ -1,7 +1,7 @@
 """Run the trained classifier on a frame, a folder of frames, or a video/RTSP stream.
 
-python scripts/detect.py --model outputs/run/best_model.joblib --spots data/synthetic/spots.json \
-    --source data/synthetic/frame.png --out outputs/detect
+python scripts/detect.py --model outputs/cnrext_side_cams/best_model.joblib --spots configs/society_spots.json \
+    --source rtsp://<camera> --every 60 --smooth 5 --out outputs/detect
 """
 import argparse
 import sys

@@ -9,7 +9,7 @@ from parking.models import OccupancyClassifier
 from parking.scheduler import AvailabilityModel, AwayDeclaration, GuestAllocator, OccupancyHistory
 from parking.selection import run_selection
 from parking.spots import Spot, crop_spot, load_spots, order_quad, save_spots
-from parking.synthetic import make_frame, make_occupancy_log, synthetic_patch
+from tests.helpers.synthetic import make_frame, make_occupancy_log, synthetic_patch
 
 
 @pytest.fixture(scope="module")

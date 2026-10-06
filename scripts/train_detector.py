@@ -5,7 +5,6 @@ HOG / LBP / GLCM / RGB / HSV, and every (feature set x LogReg / RF / SVM / XGBoo
 combination is compared with grouped CV; the best becomes stage 2 of the cascade.
 Then hard-negative mining, and detection AP on held-out frames.
 
-python scripts/train_detector.py --scenes data/scenes/train_* --out outputs/detector
 python scripts/train_detector.py --yolo PKLot.v1/train/images --car-classes 1 --empty-classes 0 \
        --test-yolo PKLot.v1/valid/images --out outputs/detector_pklot
 python scripts/train_detector.py --pklot PKLot/PKLot --out outputs/detector_pklot
@@ -33,7 +32,7 @@ from parking.models import MODEL_NAMES  # noqa: E402
 from parking.selection import run_selection  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument("--scenes", nargs="*", default=[], help="scene folders containing annotations.json")
+ap.add_argument("--scenes", nargs="*", default=[], help="folders with our own annotations.json (frames + car boxes)")
 ap.add_argument("--yolo", help="YOLO images dir (labels in ../labels)")
 ap.add_argument("--test-yolo", help="separate YOLO images dir for evaluation")
 ap.add_argument("--car-classes", type=int, nargs="+", default=[0])

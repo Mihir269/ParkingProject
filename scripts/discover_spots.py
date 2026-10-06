@@ -2,8 +2,8 @@
 where cars park and later leave (or arrive), and write spots.json + occupancy log.
 
 python scripts/discover_spots.py --detector outputs/detector/car_detector.joblib \
-       --frames data/scenes/discovery/frames --out outputs/discovery \
-       --ground-truth data/scenes/discovery/annotations.json      # optional evaluation
+       --cnrpark data/cnrpark --camera 3 --out outputs/discovery_cam3
+python scripts/discover_spots.py --detector ... --frames captures/ --out outputs/discovery   # own camera
 
 Frame timestamps come from the file name (``--ts-format``, default
 ``%Y%m%d_%H%M``), falling back to file modification time. A video works too

@@ -2,7 +2,7 @@
 
 Supported sources:
 
-* our scene format: ``annotations.json`` written by ``scenes.save_scene``
+* our own format: ``annotations.json`` (frames with timestamps and car boxes)
   (or by hand: ``{"frames": [{"image": ..., "timestamp": ..., "cars": [[x1,y1,x2,y2], ...]}]}``)
 * YOLO format (e.g. the Roboflow export of PKLot, or anything labelled in
   Roboflow / CVAT / Label Studio): ``images/*.jpg`` + ``labels/*.txt`` with
@@ -280,8 +280,10 @@ def cnrpark_ext_frames(root, cameras=None, full_size=(2592, 1944), img_size=(100
             g = g[g.slot_id.isin(bays)]
             cars = np.array([bays[s] for s in g.slot_id[g.occupancy == 1]]).reshape(-1, 4)
             free = np.array([bays[s] for s in g.slot_id[g.occupancy == 0]]).reshape(-1, 4)
-            frames.append(FrameAnnotation(str(img), cars, free, random_negatives=False, timestamp=ts,
-                                          group=f"camera{cam}:{ts.date()}"))  # camera-day
+            fa = FrameAnnotation(str(img), cars, free, random_negatives=False, timestamp=ts,
+                                 group=f"camera{cam}:{ts.date()}")  # camera-day
+            fa.slots = dict(zip(g.slot_id.astype(int), g.occupancy.astype(int)))  # ground truth per space
+            frames.append(fa)
         out[cam] = {"bays": bays, "frames": sorted(frames, key=lambda f: f.timestamp)}
     return out
 

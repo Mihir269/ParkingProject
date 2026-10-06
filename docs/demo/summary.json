@@ -1,0 +1,46 @@
+{
+  "occupancy": {
+    "frames": 451,
+    "spaces": 21,
+    "days": 23,
+    "labelled_decisions": 9471,
+    "accuracy": 0.9521697814380741,
+    "f1_occupied": 0.9578251559445117
+  },
+  "guests": {
+    "train_days": 16,
+    "test_days": 7,
+    "requests": 63,
+    "guest_hours": 2,
+    "sweep": [
+      {
+        "confidence": 0.5,
+        "allotted": 15,
+        "stayed_free": 1.0
+      },
+      {
+        "confidence": 0.7,
+        "allotted": 15,
+        "stayed_free": 1.0
+      },
+      {
+        "confidence": 0.9,
+        "allotted": 15,
+        "stayed_free": 1.0
+      }
+    ],
+    "naive": {
+      "allotted": 49,
+      "stayed_free": 0.3469387755102041
+    }
+  },
+  "detector": {
+    "ap": 0.3024166946991099,
+    "precision": 0.07441490570324927,
+    "recall": 0.5453788509575354,
+    "n_gt": 1201
+  },
+  "camera": 3,
+  "occupancy_model": "texture+color | rf",
+  "timelapse_day": "2016-02-12"
+}

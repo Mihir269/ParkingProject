@@ -6,7 +6,7 @@ from parking.detector import CarDetector, DetectorConfig, Stage1HOG, average_pre
 from parking.discovery import SpotDiscovery, _runs, evaluate_discovery
 from parking.features import FeatureConfig, FeatureExtractor
 from parking.models import make_candidate
-from parking.scenes import make_scene, save_scene
+from tests.helpers.scenes import make_scene, save_scene
 
 
 def test_iou_and_nms():
