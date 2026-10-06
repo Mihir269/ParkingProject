@@ -1,6 +1,7 @@
 """Download public parking datasets into data/.
 
     python scripts/download_datasets.py voc                # PASCAL VOC 2007, car boxes (~0.9 GB) - car detector
+    python scripts/download_datasets.py voc2012            # + VOC 2012 trainval (~1.9 GB) for "07+12" training
     python scripts/download_datasets.py cnrpark            # CNRPark+EXT: metadata + full frames (~1.1 GB)
     python scripts/download_datasets.py cnrpark --patches  # + 150x150 spot patches (~0.5 GB)
     python scripts/download_datasets.py pklot              # PKLot full frames + XML (~4.6 GB)
@@ -66,6 +67,9 @@ FILES = {
         ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtrainval_06-Nov-2007.zip", 445_914_070, True),
         ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtest_06-Nov-2007.zip", 438_316_827, True),
     ],
+    "voc2012": [
+        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtrainval_11-May-2012.zip", 1_950_180_009, True),
+    ],
     # VisDrone2019-DET (Ultralytics GitHub mirror): real high-angle/drone photos, cars boxed
     "visdrone": [
         ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-train.zip", 1_549_875_511, True),
@@ -77,7 +81,7 @@ FILES = {
     ],
 }
 TARGET = {"cnrpark": "cnrpark", "cnrpark-patches": "cnrpark", "pklot": "pklot", "acpds": "acpds",
-          "ndispark": "ndispark", "voc": "voc", "visdrone": "visdrone"}
+          "ndispark": "ndispark", "voc": "voc", "voc2012": "voc", "visdrone": "visdrone"}
 
 
 def _fmt(n: float) -> str:
@@ -158,13 +162,13 @@ def fetch(name: str, root: Path, keep: bool) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dataset", choices=["voc", "visdrone", "cnrpark", "pklot", "acpds", "ndispark", "side", "all"],
+    ap.add_argument("dataset", choices=["voc", "voc2012", "visdrone", "cnrpark", "pklot", "acpds", "ndispark", "side", "all"],
                     help="side = the datasets matching an elevated side-angle camera (acpds, ndispark, cnrpark)")
     ap.add_argument("--patches", action="store_true", help="also CNRPark spot patches (occupancy classifier)")
     ap.add_argument("--root", default="data")
     ap.add_argument("--keep-archives", action="store_true")
     a = ap.parse_args()
-    names = {"voc": ["voc"], "visdrone": ["visdrone"], "cnrpark": ["cnrpark"], "pklot": ["pklot"], "acpds": ["acpds"], "ndispark": ["ndispark"],
+    names = {"voc": ["voc"], "voc2012": ["voc2012"], "visdrone": ["visdrone"], "cnrpark": ["cnrpark"], "pklot": ["pklot"], "acpds": ["acpds"], "ndispark": ["ndispark"],
              "side": ["acpds", "ndispark", "cnrpark"], "all": ["acpds", "ndispark", "cnrpark", "pklot"]}[a.dataset]
     if a.patches and "cnrpark" in names:
         names.append("cnrpark-patches")

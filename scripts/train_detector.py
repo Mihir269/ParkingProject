@@ -45,6 +45,8 @@ ap.add_argument("--cnrpark", help="CNRPark+EXT root (after download_datasets.py 
 ap.add_argument("--coco", help="COCO json with car boxes (e.g. NDISPark train_coco_annotations.json)")
 ap.add_argument("--test-coco", help="COCO json for evaluation (e.g. NDISPark val_coco_annotations.json)")
 ap.add_argument("--voc", help="PASCAL VOC root (VOCdevkit/VOC2007): train on trainval, test on test")
+ap.add_argument("--voc-extra", nargs="*", default=[],
+                help="more VOC roots used for TRAINING only, e.g. VOCdevkit/VOC2012 (standard '07+12' setup)")
 ap.add_argument("--voc-background", type=int, default=300,
                 help="VOC images WITHOUT cars added per split (background examples)")
 ap.add_argument("--acpds", help="ACPDS root (images/ + annotations.json); uses its train/test split")
@@ -89,6 +91,8 @@ if a.pklot:
     frames += load_pklot_xml(a.pklot)
 if a.voc:  # official split: trainval for training, test for evaluation
     frames += load_voc(a.voc, "trainval", n_background=a.voc_background, seed=a.seed)
+    for k, extra in enumerate(a.voc_extra, 1):
+        frames += load_voc(extra, "trainval", n_background=a.voc_background, seed=a.seed + 10 * k)
     test = (test or []) + load_voc(a.voc, "test", n_background=a.voc_background, seed=a.seed + 1)
 if a.coco:
     frames += load_coco(a.coco)
