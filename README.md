@@ -90,18 +90,10 @@ then the best (feature set × model) from the comparison below.
 | hog + texture | 0.828 | 0.852 | 0.893 | 0.888 |
 | **all** | 0.851 | 0.861 | **0.903** (selected) | 0.897 |
 
-**Detection on the VOC 2007 test set: AP@0.5 = 0.30.** For whole-image car
-detection, HOG (shape) matters most and colour least, the opposite of the
-occupancy task, where the spot is fixed.
+
 
 ![detector examples](docs/demo/detector_examples.jpg)
 *VOC 2007 test photos. Red = detector (score ≥ 0.75), yellow = ground truth.*
-
-Honest notes: AP 0.30 is typical for hand-crafted features on VOC cars (deep
-detectors score far higher). Only 300 of the 4,231 car-free test images were
-scored, so it is slightly optimistic. Adding VOC 2012 (2.6× the training cars)
-did not help (AP 0.29) and doubled the run time, so the VOC 2007 model is kept.
-A learning curve showed only about +0.01 F1 per doubling of the data.
 
 ## Quick start
 
