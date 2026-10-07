@@ -3,12 +3,12 @@ on every feature set, select the best and save it.
 
 Examples
 --------
-# folder layout (our own crops, PKLotSegmented, ACPDS patches):
-python scripts/train_models.py --data data/acpds_patches --group-level 1
+# folder layout (our own crops from crop_patches.py), grouped by frame folder:
+python scripts/train_models.py --data data/own_patches --group-level 0
 
 # CNRPark-EXT (label list) with camera as group:
-python scripts/train_models.py --labels CNR-EXT/LABELS/all.txt --images CNR-EXT/PATCHES \
-    --group-level 2 --max-per-class 5000 --tune-top 3
+python scripts/train_models.py --labels data/cnrpark/LABELS/all.txt --images data/cnrpark/PATCHES \
+    --group-level 2 --max-per-class 3000
 """
 import argparse
 import json

@@ -1,37 +1,15 @@
-"""Download public parking datasets into data/.
+"""Download the public datasets used in this project into data/.
 
-    python scripts/download_datasets.py voc                # PASCAL VOC 2007, car boxes (~0.9 GB) - car detector
-    python scripts/download_datasets.py voc2012            # + VOC 2012 trainval (~1.9 GB) for "07+12" training
-    python scripts/download_datasets.py cnrpark            # CNRPark+EXT: metadata + full frames (~1.1 GB)
-    python scripts/download_datasets.py cnrpark --patches  # + 150x150 spot patches (~0.5 GB)
-    python scripts/download_datasets.py pklot              # PKLot full frames + XML (~4.6 GB)
-    python scripts/download_datasets.py side               # ACPDS + NDISPark + CNRPark+EXT (elevated side views)
-    python scripts/download_datasets.py all --patches
+    python scripts/download_datasets.py cnrpark --patches   # CNRPark-EXT (~1.6 GB): occupancy model + demo
+    python scripts/download_datasets.py voc                 # PASCAL VOC 2007 (~0.9 GB): car detector
 
-Downloads resume if interrupted (HTTP Range), archives are extracted and then
-deleted (``--keep-archives`` to keep them). Re-running skips finished parts.
+Downloads resume if interrupted; archives are extracted and then deleted.
 
-Sources
--------
-CNRPark+EXT  http://cnrpark.it  (files hosted on GitHub releases of fabiocarrara/deep-parking)
+CNRPark-EXT  http://cnrpark.it  (files on GitHub releases of fabiocarrara/deep-parking)
              Amato et al., "Deep learning for decentralized parking lot occupancy
              detection", Expert Systems with Applications 72, 2017.
 PASCAL VOC   http://host.robots.ox.ac.uk/pascal/VOC/voc2007/  (mirrored on GitHub by Ultralytics)
              Everingham et al., "The PASCAL Visual Object Classes (VOC) Challenge", IJCV 2010.
-VisDrone     https://github.com/VisDrone/VisDrone-Dataset  (mirrored by Ultralytics)
-             Zhu et al., "Detection and Tracking Meet Drones Challenge", TPAMI 2021.
-ACPDS        https://github.com/martin-marek/parking-space-occupancy  (MIT)
-             Marek, "Image-Based Parking Space Occupancy Classification: Dataset
-             and Baseline", arXiv:2107.12207, 2021.
-NDISPark     https://zenodo.org/records/6560823
-             Ciampi et al., "Domain Adaptation for Traffic Density Estimation",
-             VISAPP 2021.
-PKLot        https://web.inf.ufpr.br/vri/databases/parking-lot-database/  (CC BY 4.0)
-             Almeida et al., "PKLot - A robust dataset for parking lot
-             classification", Expert Systems with Applications 42(11), 2015.
-             If the UFPR server is slow or down, a mirror exists on Roboflow
-             (https://public.roboflow.com/object-detection/pklot, free account,
-             export "YOLO v8") -> use train_detector.py --yolo instead.
 """
 from __future__ import annotations
 
@@ -44,44 +22,22 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-GH = "https://github.com/fabiocarrara/deep-parking/releases/download/archive/"
-FILES = {
+GH_CNR = "https://github.com/fabiocarrara/deep-parking/releases/download/archive/"
+GH_VOC = "https://github.com/ultralytics/assets/releases/download/v0.0.0/"
+FILES = {  # name -> [(url, approx bytes, extract?)]
     "cnrpark": [
-        # (url, size in bytes approx, extract?)
-        (GH + "CNRPark+EXT.csv", 18_132_695, False),
-        (GH + "CNR-EXT_FULL_IMAGE_1000x750.tar", 1_100_000_000, True),
+        (GH_CNR + "CNRPark+EXT.csv", 18_132_695, False),
+        (GH_CNR + "CNR-EXT_FULL_IMAGE_1000x750.tar", 1_100_000_000, True),
     ],
     "cnrpark-patches": [
-        (GH + "CNR-EXT-Patches-150x150.zip", 449_500_000, True),
-        (GH + "CNRPark-Patches-150x150.zip", 36_600_000, True),
+        (GH_CNR + "CNR-EXT-Patches-150x150.zip", 449_500_000, True),
     ],
-    "pklot": [
-        ("http://www.inf.ufpr.br/vri/databases/PKLot.tar.gz", 4_600_000_000, True),
-    ],
-    # Action-Camera Parking Dataset: 293 images from ~10 m high, every image a different view
-    "acpds": [
-        ("https://pub-e8bbdcbe8f6243b2a9933704a9b1d8bc.r2.dev/parking%2Frois_gopro.zip", 300_000_000, True),
-    ],
-    # PASCAL VOC 2007 (Ultralytics GitHub mirror): ~10k real photos, every car boxed
     "voc": [
-        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtrainval_06-Nov-2007.zip", 445_914_070, True),
-        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtest_06-Nov-2007.zip", 438_316_827, True),
-    ],
-    "voc2012": [
-        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VOCtrainval_11-May-2012.zip", 1_950_180_009, True),
-    ],
-    # VisDrone2019-DET (Ultralytics GitHub mirror): real high-angle/drone photos, cars boxed
-    "visdrone": [
-        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-train.zip", 1_549_875_511, True),
-        ("https://github.com/ultralytics/assets/releases/download/v0.0.0/VisDrone2019-DET-val.zip", 81_638_851, True),
-    ],
-    # NDISPark: ~250 images, 7 parking-lot cameras, EVERY car boxed (COCO), day + night
-    "ndispark": [
-        ("https://zenodo.org/records/6560823/files/ndis_park.zip?download=1", 118_200_000, True),
+        (GH_VOC + "VOCtrainval_06-Nov-2007.zip", 445_914_070, True),
+        (GH_VOC + "VOCtest_06-Nov-2007.zip", 438_316_827, True),
     ],
 }
-TARGET = {"cnrpark": "cnrpark", "cnrpark-patches": "cnrpark", "pklot": "pklot", "acpds": "acpds",
-          "ndispark": "ndispark", "voc": "voc", "voc2012": "voc", "visdrone": "visdrone"}
+TARGET = {"cnrpark": "cnrpark", "cnrpark-patches": "cnrpark", "voc": "voc"}
 
 
 def _fmt(n: float) -> str:
@@ -162,34 +118,17 @@ def fetch(name: str, root: Path, keep: bool) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dataset", choices=["voc", "voc2012", "visdrone", "cnrpark", "pklot", "acpds", "ndispark", "side", "all"],
-                    help="side = the datasets matching an elevated side-angle camera (acpds, ndispark, cnrpark)")
-    ap.add_argument("--patches", action="store_true", help="also CNRPark spot patches (occupancy classifier)")
+    ap.add_argument("dataset", choices=["cnrpark", "voc", "all"])
+    ap.add_argument("--patches", action="store_true", help="also CNRPark-EXT spot patches (occupancy model)")
     ap.add_argument("--root", default="data")
     ap.add_argument("--keep-archives", action="store_true")
     a = ap.parse_args()
-    names = {"voc": ["voc"], "voc2012": ["voc2012"], "visdrone": ["visdrone"], "cnrpark": ["cnrpark"], "pklot": ["pklot"], "acpds": ["acpds"], "ndispark": ["ndispark"],
-             "side": ["acpds", "ndispark", "cnrpark"], "all": ["acpds", "ndispark", "cnrpark", "pklot"]}[a.dataset]
+    names = {"cnrpark": ["cnrpark"], "voc": ["voc"], "all": ["cnrpark", "voc"]}[a.dataset]
     if a.patches and "cnrpark" in names:
         names.append("cnrpark-patches")
     for n in names:
         print(f"[{n}]")
         fetch(n, Path(a.root), a.keep_archives)
-    print("\nNext:")
-    if "cnrpark" in names:
-        print("  python scripts/train_models.py --labels data/cnrpark/LABELS/all.txt --images data/cnrpark/PATCHES "
-              "--group-level 2 --max-per-class 3000        # occupancy classifier, grouped by camera")
-        print("  python scripts/train_detector.py --cnrpark data/cnrpark --max-frames 200   # car detector")
-    if "voc" in names:
-        print("  python scripts/train_detector.py --voc data/voc --n-windows 8 --pos-jitter 1 --neg-per-frame 6 --cv 3")
-    if "pklot" in names:
-        print("  python scripts/train_detector.py --pklot data/pklot/PKLot/PKLot --max-frames 300")
-    if "acpds" in names:
-        print("  python scripts/prepare_acpds_patches.py --root data/acpds && "
-              "python scripts/train_models.py --data data/acpds_patches --group-level 1")
-    if "ndispark" in names:
-        print("  python scripts/train_detector.py --coco data/ndispark/train/train_coco_annotations.json "
-              "--test-coco data/ndispark/validation/val_coco_annotations.json")
 
 
 if __name__ == "__main__":

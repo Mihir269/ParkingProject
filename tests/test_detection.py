@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from parking.annotations import FrameAnnotation, iou, nms, sample_patches, suggest_window_sizes
+from parking.annotations import iou, nms, sample_patches, suggest_window_sizes
 from parking.detector import CarDetector, DetectorConfig, Stage1HOG, average_precision
 from parking.discovery import SpotDiscovery, _runs, evaluate_discovery
 from parking.features import FeatureConfig, FeatureExtractor

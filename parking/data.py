@@ -2,7 +2,7 @@
 
 Two layouts are supported:
 
-1. Folder layout (works with PKLot "PKLotSegmented" and our own crops)::
+1. Folder layout (our own crops from crop_patches.py)::
 
        root/.../<anything>/{empty|occupied}/*.jpg
 

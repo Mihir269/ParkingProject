@@ -171,7 +171,7 @@ def mine_hard_negatives(det: CarDetector, frames: list[FrameAnnotation], max_per
 def average_precision(det: CarDetector, frames: list[FrameAnnotation], iou_thr: float = 0.5) -> dict:
     """VOC-style AP@IoU plus precision/recall at the detector's threshold.
 
-    For datasets without ``random_negatives`` (PKLot), detections outside the
+    For datasets without ``random_negatives`` (space labels only), detections outside the
     annotated spaces are ignored instead of counted as false positives."""
     recs, n_gt = [], 0
     tp_thr = fp_thr = 0

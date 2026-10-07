@@ -6,3 +6,4 @@ outputs/
 *.npz
 *.joblib
 .venv/
+docs/demo/*.csv

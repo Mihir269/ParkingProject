@@ -1,18 +1,13 @@
-"""Frame-level car annotations and training-patch sampling for the car detector.
+"""Frame-level car annotations, box utilities and training-patch sampling for the
+car detector.
 
-Supported sources:
+Sources:
 
-* our own format: ``annotations.json`` (frames with timestamps and car boxes)
-  (or by hand: ``{"frames": [{"image": ..., "timestamp": ..., "cars": [[x1,y1,x2,y2], ...]}]}``)
-* YOLO format (e.g. the Roboflow export of PKLot, or anything labelled in
-  Roboflow / CVAT / Label Studio): ``images/*.jpg`` + ``labels/*.txt`` with
-  ``class cx cy w h`` normalised. Choose which class ids mean "car".
-* PKLot original XML: every parking space with ``occupied="0|1"`` and its contour.
-
-PKLot and other parking-space datasets only label cars *inside spaces*. Cars
-driving or parked in the lane are unlabelled, so random background crops could
-contain unlabelled cars. For such sources ``random_negatives`` is False and only
-empty spaces are used as negatives.
+* PASCAL VOC (``load_voc``): every car in every photo is boxed. Used to train the detector.
+* CNRPark-EXT full frames (``cnrpark_ext_frames``): boxes of labelled parking spaces
+  with per-frame occupancy and timestamps. Used for the demo and spot discovery.
+* our own ``annotations.json`` (``load_scene_json``):
+  ``{"frames": [{"image": ..., "timestamp": ..., "cars": [[x1,y1,x2,y2], ...]}]}``
 """
 from __future__ import annotations
 
@@ -24,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .data import IMG_EXTS, read_rgb
+from .data import read_rgb
 
 
 @dataclass
@@ -97,52 +92,6 @@ def load_scene_json(path: str | Path) -> list[FrameAnnotation]:
     return out
 
 
-def load_yolo(images_dir, labels_dir=None, car_classes=(0,), empty_classes=(),
-              random_negatives: bool = True, group_from_name=None) -> list[FrameAnnotation]:
-    """``car_classes``: class ids that are cars (e.g. space-occupied).
-    ``empty_classes``: class ids that are guaranteed car-free (e.g. space-empty)."""
-    images_dir = Path(images_dir)
-    labels_dir = Path(labels_dir) if labels_dir else images_dir.parent / "labels"
-    out = []
-    for img in sorted(p for p in images_dir.iterdir() if p.suffix.lower() in IMG_EXTS):
-        lab = labels_dir / (img.stem + ".txt")
-        rows = np.loadtxt(lab, ndmin=2) if lab.exists() and lab.stat().st_size else np.zeros((0, 5))
-        import cv2
-
-        h, w = cv2.imread(str(img), cv2.IMREAD_REDUCED_GRAYSCALE_2).shape[:2]
-        h, w = h * 2, w * 2
-
-        def to_xyxy(r):
-            cx, cy, bw, bh = r[:, 1] * w, r[:, 2] * h, r[:, 3] * w, r[:, 4] * h
-            return np.column_stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2])
-
-        cars = to_xyxy(rows[np.isin(rows[:, 0], car_classes)])
-        neg = to_xyxy(rows[np.isin(rows[:, 0], empty_classes)])
-        group = group_from_name(img.name) if group_from_name else "0"
-        out.append(FrameAnnotation(str(img), cars, neg, random_negatives, group=group))
-    return out
-
-
-def load_pklot_xml(root) -> list[FrameAnnotation]:
-    """PKLot/<lot>/<weather>/<date>/<image>.jpg + .xml. Group = parking lot."""
-    root = Path(root)
-    out = []
-    for xml in sorted(root.rglob("*.xml")):
-        img = xml.with_suffix(".jpg")
-        if not img.exists():
-            continue
-        cars, empty = [], []
-        for sp in ET.parse(xml).getroot().iter("space"):
-            pts = np.array([[float(p.get("x")), float(p.get("y"))] for p in sp.iter("point")])
-            if len(pts) < 3 or sp.get("occupied") is None:
-                continue
-            box = [*pts.min(0), *pts.max(0)]
-            (cars if sp.get("occupied") == "1" else empty).append(box)
-        out.append(FrameAnnotation(str(img), np.array(cars).reshape(-1, 4), np.array(empty).reshape(-1, 4),
-                                   random_negatives=False, group=xml.relative_to(root).parts[0]))
-    return out
-
-
 # ---------------------------------------------------------------- patch sampling
 def suggest_window_sizes(frames: list[FrameAnnotation], k: int = 5, seed: int = 0) -> list[tuple[int, int]]:
     """Typical car box sizes in this camera -> sliding-window sizes (k-means on log w, log h)."""
@@ -175,12 +124,11 @@ def _jitter(box, rng, amount):
 
 
 def sample_patches(frames: list[FrameAnnotation], window_sizes, neg_per_frame: int = 30,
-                   pos_jitter: int = 2, seed: int = 0, context_negatives: int = 0):
+                   pos_jitter: int = 2, seed: int = 0):
     """Car / not-car training patches.
 
     positives : every car box + ``pos_jitter`` slightly shifted/scaled copies + mirror
-    negatives : known empty boxes, ``context_negatives`` shifted/oversized windows per
-                car, random windows with IoU < 0.3 to every car
+    negatives : known empty boxes, random windows with IoU < 0.3 to every car
                 (only if ``random_negatives``), and *partial* cars (IoU 0.1-0.3), which
                 teach the classifier to fire only on a well-centred car
     Returns (patches, labels, groups).
@@ -205,25 +153,6 @@ def sample_patches(frames: list[FrameAnnotation], window_sizes, neg_per_frame: i
                 add(img, _jitter(box, rng, 0.06), 1, f.group)
         for box in f.negatives:
             add(img, box, 0, f.group)
-        # "Badly placed" windows around labelled cars: shifted half off the car, or
-        # scaled up over several cars. Safe negatives even when other cars in the image
-        # are unlabelled, and they teach the classifier to fire only on a centred car.
-        for box in f.cars:
-            for _ in range(context_negatives):
-                x1, y1, x2, y2 = box
-                w, h = x2 - x1, y2 - y1
-                if rng.random() < 0.6:
-                    ang = rng.uniform(0, 2 * np.pi)
-                    d = rng.uniform(0.5, 0.8)
-                    cand = box + np.array([np.cos(ang) * w, np.sin(ang) * h] * 2) * d
-                else:
-                    s = rng.uniform(1.8, 2.6)
-                    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                    cand = np.array([cx - w * s / 2, cy - h * s / 2, cx + w * s / 2, cy + h * s / 2])
-                if cand[0] < 0 or cand[1] < 0 or cand[2] > W or cand[3] > H:
-                    continue
-                if iou(cand, f.cars).max() < 0.3:
-                    add(img, cand, 0, f.group)
         n_rand = neg_per_frame if f.random_negatives else 0
         tries = 0
         while n_rand > 0 and tries < 50 * neg_per_frame:
@@ -285,77 +214,6 @@ def cnrpark_ext_frames(root, cameras=None, full_size=(2592, 1944), img_size=(100
             fa.slots = dict(zip(g.slot_id.astype(int), g.occupancy.astype(int)))  # ground truth per space
             frames.append(fa)
         out[cam] = {"bays": bays, "frames": sorted(frames, key=lambda f: f.timestamp)}
-    return out
-
-
-# ---------------------------------------------------------------- COCO (NDISPark and others)
-def load_coco(json_path, images_dir=None, category: str = "car", group_fn=None) -> list[FrameAnnotation]:
-    """COCO detection annotations -> frames. Every car is boxed in datasets like
-    NDISPark, so random background windows are safe negatives.
-
-    ``group_fn(file_name)`` -> camera id for leakage-free splits; NDISPark file names
-    are ``<camera>_<unix time>.jpg``, which is the default."""
-    json_path = Path(json_path)
-    images_dir = Path(images_dir) if images_dir else json_path.parent / "imgs"
-    data = json.loads(json_path.read_text())
-    cat_ids = {c["id"] for c in data.get("categories", []) if c["name"] == category} or None
-    boxes: dict[int, list] = {}
-    for a in data["annotations"]:
-        if cat_ids is None or a["category_id"] in cat_ids:
-            x, y, w, h = a["bbox"]
-            boxes.setdefault(a["image_id"], []).append([x, y, x + w, y + h])
-    group_fn = group_fn or (lambda n: Path(n).stem.split("_")[0])
-    out = []
-    for im in data["images"]:
-        name = im["file_name"]
-        ts = None
-        stem = Path(name).stem.split("_")
-        if len(stem) > 1 and stem[-1].isdigit() and len(stem[-1]) == 10:  # unix time
-            ts = datetime.fromtimestamp(int(stem[-1]))
-        out.append(FrameAnnotation(str(images_dir / name), np.array(boxes.get(im["id"], []), float).reshape(-1, 4),
-                                   random_negatives=True, timestamp=ts, group=group_fn(name)))
-    return out
-
-
-# ---------------------------------------------------------------- ACPDS (action camera, ~10 m high)
-def load_acpds(root, split: str = "all") -> list[dict]:
-    """Action-Camera Parking Dataset (Marek 2021): ``images/`` + ``annotations.json``
-    with per-image ``rois_list`` (4 corners per space, normalised to [0,1]) and
-    ``occupancy_list``, split into train / valid / test by parking lot.
-
-    Returns [{"path", "split", "quads" (N,4,2 pixels), "occupied" (N,)}]."""
-    import cv2
-
-    root = Path(root)
-    if not (root / "annotations.json").exists():  # archive may add a top-level folder
-        found = sorted(root.rglob("annotations.json"))
-        if not found:
-            raise FileNotFoundError(f"no annotations.json under {root}")
-        root = found[0].parent
-    ann = json.loads((root / "annotations.json").read_text())
-    splits = ["train", "valid", "test"] if split == "all" else [split]
-    out = []
-    for sp in splits:
-        a = ann[sp]
-        for name, rois, occ in zip(a["file_names"], a["rois_list"], a["occupancy_list"]):
-            path = root / "images" / name
-            img = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_4)
-            h, w = (img.shape[0] * 4, img.shape[1] * 4) if img is not None else (1, 1)
-            q = np.asarray(rois, float).reshape(-1, 4, 2) * [w - 1, h - 1]
-            out.append({"path": str(path), "split": sp, "quads": q, "occupied": np.asarray(occ, int)})
-    return out
-
-
-def acpds_frames(root, split: str = "all") -> list[FrameAnnotation]:
-    """ACPDS as detector annotations: occupied spaces = cars, free spaces = negatives.
-    Cars outside annotated spaces are unlabelled -> random_negatives=False.
-    Each image is its own viewpoint, so group = image."""
-    out = []
-    for r in load_acpds(root, split):
-        boxes = np.column_stack([r["quads"].min(1), r["quads"].max(1)]) if len(r["quads"]) else np.zeros((0, 4))
-        occ = r["occupied"].astype(bool)
-        out.append(FrameAnnotation(r["path"], boxes[occ], boxes[~occ], random_negatives=False,
-                                   group=f"{r['split']}:{Path(r['path']).stem}"))
     return out
 
 

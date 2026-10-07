@@ -117,9 +117,8 @@ cat data/cnrpark/LABELS/camera{1,2,3,9}.txt > data/cnrpark/LABELS/side_cams.txt
 python scripts/train_models.py --labels data/cnrpark/LABELS/side_cams.txt --images data/cnrpark/PATCHES \
        --group-level 2 --max-per-class 3000 --cv 3 --test-size 0.25 --out outputs/occupancy
 
-# car detector
-python scripts/train_detector.py --voc data/voc --n-windows 8 --pos-jitter 1 --neg-per-frame 6 \
-       --cv 3 --hard-neg-frames 60 --out outputs/detector
+# car detector (defaults = the settings used for the results above)
+python scripts/train_detector.py --voc data/voc --out outputs/detector
 
 # demo (writes the GIF, figures and numbers above)
 python scripts/demo.py --occupancy-model outputs/occupancy/best_model.joblib \
@@ -128,9 +127,22 @@ python scripts/demo.py --occupancy-model outputs/occupancy/best_model.joblib \
 python -m pytest   # unit tests
 ```
 
-On a real society camera: `annotate_spots.py` (mark spots once), `crop_patches.py`
-(build a labelled set from your frames), `detect.py` (live occupancy from a
-video/RTSP stream), `discover_spots.py` (find spots automatically).
+### Run it on a camera
+
+```bash
+# 1. mark the spots once (opens a window: click 4 corners per spot)
+python scripts/annotate_spots.py --image one_frame.jpg --out configs/my_spots.json
+
+# 2. free/occupied for an image, a folder, a video file or a live stream
+python scripts/detect.py --model outputs/occupancy/best_model.joblib --spots configs/my_spots.json \
+       --source rtsp://<camera> --every 60 --smooth 5
+```
+
+`detect.py` prints the free spots, saves an annotated picture and appends to
+`occupancy_log.csv`, the history the guest allotment learns from. Ready-made spots
+for CNRPark camera 3: `configs/cnrpark_camera3_spots.json`. Instead of marking spots,
+`discover_spots.py` finds them from a few days of footage with the car detector.
+`crop_patches.py` turns your own frames into a labelled training set.
 
 ## Repository
 
@@ -139,13 +151,15 @@ parking/                 the library
   features.py            HOG, LBP, GLCM, RGB/HSV features
   models.py              LogReg / RF / SVM / XGBoost candidates, voting ensemble, saved model
   selection.py           grouped cross-validation and best-model selection
-  data.py, annotations.py  loaders: CNRPark-EXT, PASCAL VOC, PKLot, ACPDS, COCO/NDISPark, YOLO
+  data.py                spot-patch loaders (CNRPark-EXT label lists, own crops)
+  annotations.py         frame loaders (CNRPark-EXT frames, PASCAL VOC), boxes, patch sampling
   spots.py               spot polygons, perspective crop, drawing
   detect.py              per-frame occupancy + temporal smoothing
   detector.py            sliding-window car detector (HOG stage 1 + best model stage 2)
   discovery.py           spot discovery from parked-car activity
   scheduler.py           occupancy history -> availability -> guest allocator
-scripts/                 command-line tools (download, train, evaluate, demo, deploy)
+scripts/                 download, train, demo, and run on a camera
+configs/                 spot polygons (CNRPark camera 3 example)
 docs/demo/               demo outputs shown above
 docs/results/            full result tables and figures
 tests/                   unit tests (tiny synthetic fixtures, only to check the code)
@@ -157,11 +171,11 @@ tests/                   unit tests (tiny synthetic fixtures, only to check the 
 |---|---|---|
 | CNRPark-EXT | occupancy model, demo | http://cnrpark.it (Amato et al., ESWA 2017) |
 | PASCAL VOC 2007 | car detector | http://host.robots.ox.ac.uk/pascal/VOC/ (Everingham et al., IJCV 2010) |
-| ACPDS | occupancy, ~10 m side views (loader ready) | https://github.com/martin-marek/parking-space-occupancy |
-| NDISPark | detector, every car boxed, day/night (loader ready) | https://zenodo.org/records/6560823 |
-| PKLot | occupancy, rooftop views (loader ready) | https://web.inf.ufpr.br/vri/databases/parking-lot-database/ |
 
-`scripts/download_datasets.py` downloads them. Please cite the original papers.
+`scripts/download_datasets.py` downloads both. Please cite the original papers.
+Worth trying next for our camera placement: ACPDS (~10 m side views,
+https://github.com/martin-marek/parking-space-occupancy) and NDISPark (every car
+boxed, day and night, https://zenodo.org/records/6560823).
 
 ## Limitations and next steps
 
