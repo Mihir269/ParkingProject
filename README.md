@@ -169,14 +169,3 @@ Worth trying next for our camera placement: ACPDS (~10 m side views,
 https://github.com/martin-marek/parking-space-occupancy) and NDISPark (every car
 boxed, day and night, https://zenodo.org/records/6560823).
 
-## Limitations and next steps
-
-* The demo car park is an office (busy all day). A residential society has the
-  opposite pattern (free during office hours), which is where guests benefit most.
-  The next step is footage from a society camera.
-* Detector false alarms are the weak point of the classical approach; spot
-  discovery tolerates them (a false alarm on a wall never "leaves", so it never
-  becomes a confirmed spot), but a deep detector would be much stronger.
-* Camera placement: an elevated side view (~10 m, mall-style) is assumed;
-  Prof. Kulkarni first suggested ~10 ft looking along the lane. Both work with
-  the same code.
